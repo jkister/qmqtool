@@ -1,0 +1,9 @@
+target server1.example.com
+        target-type	=	mail-stats
+        short-desc	=	"server1.example.com"
+
+#target server2.example.com
+#        target-type	=	mail-stats
+#        short-desc	=	"server2.example.com"
+
+# [...]

@@ -1,0 +1,5 @@
+detect failures in configure, e.g.:
+ ./configure: Makefile: cannot create
+
+getsplit at configure?
+ would require running configure as root

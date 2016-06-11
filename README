@@ -1,0 +1,274 @@
+qmqtool v1.15
+Copyright 2003-2016 Jeremy Kister 
+# (wow, has it been 13 years of qmail?)
+http://github.com/jkister/qmqtool
+
+qmqtool is a qmail queue manipulation program geared towards the
+viewing and safe modification of the contents in a qmail queue.
+
+qmqtool may be copied and distributed under the terms found in the
+Perl "Artistic License".  A copy of this license may be found in the
+standard Perl distribution, or in the file "Artistic".
+
+please report all bugs to: qmqtool-devel @t jeremykister.com.
+
+
+Installation:
+
+See INSTALL
+
+
+Notes:
+
+This tool utilizes your system's grep command (among others).  Note
+that GNU's grep is much faster than Solaris's grep, so you should
+consider installing it, as your searches (with -f) will be about five
+times faster.  GNU grep can also use a pipe as a logical OR (e.g.
+qmqtool -f 'this|that').
+
+qmqtool supports many arguments, each which must be used separately
+unless specifically allowed.  All syntax is described with qmqtool -h.
+
+qmqtool -[lLRT] [-Q]
+	show queue information: 
+	l for all
+	L for messages with local recipients
+	R for messages with remote recipients
+	T for messages not yet preprocessed (todo)
+
+	qmqtool starts by stating the message number, followed by a space,
+	an open-parenthesis, the message number, the string 'remote' or
+	'local' (representing where the message is to be delivered),
+	followed by a close-parenthesis.  It continues displaying
+	"Envelope Sender", "Envelope Recipient", "From", "To",
+	"Subject", and "Date", if it can.  Lastly, it displays the
+	size of the message, in the highest reasonable unit, followed
+	by an empty line.  Note that using the -l option does not
+	include information about messages not yet preprocessed.  After all
+	messages are displayed, it then prints a few statistics
+	similar to running qmqtool -s.
+
+	adding -Q will print message numbers for the given message type,
+	separated by comma.  will print 0 if there are no messages.
+
+qmqtool -f 'STRING'
+	will print a comma separated list of message numbers who's
+	messages contain STRING.  Be careful to quote STRING, as spaces
+	are treated as possible new arguments on the command line and
+	special characters (like PIPE) may be interpreted by your shell.
+
+	note that STRING is a regexp; characters such as ^ ? . + () |
+	must be escaped appropriately.
+
+	some perlish-regex is supported.  for example, valid usage of -f:
+	string
+	"string[14]|string2"
+	/string[13]/i                   # case insensitive
+	'/^From: someone@example.com/i' # case insensitive
+	'/^astring$|^bstring[13]/'
+
+qmqtool -oN
+	will print a comma seperated list of messages numbers who have
+	been in the queue N or longer hours.
+
+qmqtool -xN
+	will print extended information on message number N.  format
+	identical to -l.
+	
+	N may be a single message number, or multiple messages separated
+	by comma.  instead of N, you may specify -f 'STRING' and/or -o AGE.
+
+	qmqtool -x -f 'football' -o 5
+	will show extended info on all messages containing the word	
+	"football" that are more than 5 hours old.
+
+qmqtool -s [-Q]
+	will print a counter with a breif explenation for messages with
+	local recipients, remote recipients, non-preprocessed messages,
+	and total messages - in that order, one per line. 
+
+	Adding -Q will silence the description of each value and will
+	only print the actual values, one per line.  This is very useful
+	for graphing your queue via cricket/mrtg/cacti, or, more
+	importantly, monitoring your queue, with Argus.
+
+	Note that the total value may be more than the sum of the local,
+	remote, and non-preprocessed values.
+
+	check the contrib/argus/README and contrib/cricket/README
+	for more information.
+
+qmqtool -dN
+	Will delete message number N.  N can be a single queued message
+	number or it can be multiple message numbers separated by comma.
+
+	Deleting messages is rude compared to expiring them.  When you
+	delete a message while qmail-send is running, qmail doesnt know
+	that the message has disappeared, and you'll start getting log
+	messages about it being unhappy.  a restart of qmail-send is
+	necessary to hush the log.
+
+qmqtool -d -f 'STRING'
+	This will behave the same as qmqtool -dN, except that instead of
+	specifying the message ids, you specify a string.  For example:
+	qmqtool -d -f 'Football Game'
+	will delete all messages with 'Football Game' in it.
+	
+	Note this does not remind you to restart qmail-send, unless you
+	also specify -V (for verbose).
+
+	If used with -o N, will only show messages both older than N
+	hours, and containing STRING.
+
+qmqtool -d -o N
+	This will behave the same as qmqtool -dN, except that instead of
+	specifying a message id, you specify age (in hours).  For example,
+	to delete all messages that have been queued for 18 hours:
+	qmqtool -d -o 18
+
+qmqtool -c
+	using the chart listed in qmail's INTERNALS file, qmqtool will
+	try it's best to ensure each file in your queue is in a
+	consistent state.  Since the entire queue changes so rapidly,
+	the qmail-send and qmail-smtpd programs must be stopped before
+	asking qmqtool to check queue integrity.  Once stopped, qmqtool
+	will display found fragments of emails left behind from a most
+	likely clueless admin, who tried to delete messages directly
+	from the queue.  qmqtool could stop and start the queue
+	processing program for you, but it's author decided that it's
+	your job.
+
+qmqtool -r
+	will remove all fragments of messages deemed rogue by qmqtool
+	while using the -c option.
+
+qmqtool -i
+	will show how many messages are queued per source ip address.  this
+	pays attention only to the server that gave the message to us.
+	useful for tracking down an abuser.
+
+	will report '127.0.0.2' when qmqtool can not find who sent us
+	the message.  this usually happens when the message was
+	injected into the queue manually, ie via qmail-inject. 
+
+	if your configuration uses front-end smtp servers who send their
+	messages to a set of backend servers, this option would not be
+	very helpful, as qmqtool would report the sending IP as the front-
+	end server.  To overcome this, you can supply an argument to -n,
+	specifing what smtp hop to pay attention to -- for example:
+
+	'qmqtool -i -n2' will sort the messages based on the second to
+	last server to handle the message.
+
+	use -V to display a third column containing message numbers that
+	this host has queued.
+
+qmqtool -S
+	similar to -i, except will show you how many bytes are
+	queued per destination ip address.
+
+	note that the listed amount of bytes is not necessarily the amount
+	of bytes stored on your disk; a single 200 byte email sent to 10
+	envelope recipients will show up as 2000 bytes.
+
+qmqtool -eN
+	will expire message N, where N is the queued message number.  N may
+	be a message number, or multiple message numbers separated by a
+	comma.  If the specified message is found non-preprocessed (todo),
+	qmqtool will warn you that it is not expirable.
+
+qmqtool -e -f 'STRING'
+	This will behave the same as qmqtool -eN, except that instead of
+	specifying a message id, you specify a string.  For example:
+ 	qmqtool -e -f 'Football Game'
+	will expire all messages containing the string 'Football Game'.
+
+	If used with -o N, will only expire messages both older than N
+	hours, and containing STRING.
+
+qmqtool -e -o N
+	This will behave the same as qmqtool -eN, except that instead of
+	specifying a message id, you specify age (in hours).  For example,
+	to expire all messages that have been queued for 18 hours:
+	qmqtool -e -o 18
+ 
+qmqtool -uN
+	This option is sometimes referred to as "Re-Queueing"
+
+	will un-expire message N, where N is a queued message number.  N
+	may be a message number, or multiple message numbers separated by a
+	comma.  This option may not be used with messages not yet
+	preprocessed.
+
+	This may be useful when you never want a particular message to
+	be bounced after the default 7* day period.  For example, if
+	you are queuing mail for someone's currently off-line server,
+	you probably wouldn't want to bounce their mail after 7* days:
+	you'd want to keep it for them as long as you could, so that
+	when their server regains Internet access, the mail can be
+	delivered.
+
+	Although you could be using AutoTURN for this, it can be
+	achieved be using qmail itself.  Supposing the site's domain
+	name you are queuing for is "example.com", simply run
+	qmqtool -u -f "example\.com"
+	on a daily (or similar) basis, which will first find all
+	message numbers that contain the string "example.com" and
+	will then set the modification time to now: giving them an
+	extra 7* day life span in the queue.
+
+	* the default queuelifetime is 7 days.  we check to ensure.
+
+qmqtool -u -f 'STRING'
+	This will behave the same as qmqtool -uN, except that instead of
+	specifying a message id, you specify a string.  For example:
+ 	qmqtool -u -f 'Football Game'
+	will unexpire all messages containing the string 'Football Game'.
+
+	If used with -o N, will only unexpire messages both older than N
+	hours, and containing STRING.
+
+qmqtool -u -o N
+	This will behave the same as qmqtool -uN, except that instead of
+	specifying a message id, you specify age (in hours).  For example,
+	to unexpire all messages that have been queued for 18 hours:
+	qmqtool -u -o 18
+
+qmqtool -E[A|R|L]
+	will expire [A]ll, [R]emote, or [L]ocal messages.  I don't know
+	when this this function would be useful, but can think of lots of
+	times it'd be dangerous -- beware.
+
+qmqtool -U[A|R|L]
+	the same as qmqtool -E, except that it will unexpire (Re-Queue)
+	messages.  Very useful when you've just typed qmqtool -EA, and
+	shouted "d'oh!".
+
+	This function could also be useful if your qmail server's sole
+	purpose is a backup mail server:  you don't have to bother
+	looking for strings and un-expiring them individually, rather,
+	simply keep everything in the queue.
+
+qmqtool -vN
+	will show you the first 100 lines of queued message N.  Limiting
+	the viewed message to 100 lines is good, because it trims off the
+	otherwise [hundreds of] thousands of useless encoded lines of
+	Microsoft worms.
+
+	use -w in conjunction with -v to view the whole message (e.g.
+	qmqtool -wvN (or qmqtool -w -v N).
+
+qmqtool -B(b|r)
+	will either (b)ackup the current queue in /var/qmail/queue/ to
+	/var/qmail/queue.backup/, or will (r)estore the queue in
+	/var/qmail/queue.backup/ to /var/qmail/queue/.
+	
+	Note that qmail-send/smtpd must be stopped for this process.  Also
+	beware that the restore action does not replace the current
+	queue, rather, it appends to it.  The queue layout in
+	/var/qmail/queue must be correct before either backing it up
+	or restoring to it.  The easiest way to ensure this is to run
+	'make setup check' from the qmail-1.03 source directory.  Most
+	inconsitencies in queue structure will be backed up or
+	restored, as is.
+

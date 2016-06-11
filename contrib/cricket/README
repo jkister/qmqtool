@@ -1,0 +1,14 @@
+
+Simply add the line:
+exec .1.3.6.1.4.1.18689.1.69 qcheck /script/qmtool -s -Q
+to the end of your Net-SNMP's /usr/local/share/snmp/snmpd.conf file,
+accounting for which path you've placed the qmqtool script in.
+
+> mkdir -p ~cricket/cricket-config/mailq/
+> cp contrib/cricket/Defaults ~cricket/cricket-config/mailq/
+> cp contrib/cricket/Targets ~cricket/cricket-config/mailq/
+# edit your Defaults file to ensure the proper snmp-community.
+# edit your Targets file to match your needs.
+# put /mailq in your ~cricket/cricket/subtree-sets
+> chown -R cricket ~cricket/cricket-config/mailq/
+> ~cricket/cricket/compile

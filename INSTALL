@@ -1,0 +1,24 @@
+qmqtool is just a lightweight perl script. 
+
+Without the ./configure process, users are left changing the script
+(/usr/local/bin/perl vs. /usr/bin/perl, etc.).  
+
+So, now we have an install process:
+
+1. ./configure
+   optional arguments to configure are:
+   --prefix=PREFIX   install architecture-independent files in PREFIX
+                      [/usr/local]
+   --mandir=DIR      man documentation [PREFIX/man]
+   --scriptdir=DIR   qmqtool script [PREFIX/script]
+
+   --perl=PERL       full path to perl (e.g. /usr/local/bin/perl)
+   --qmaildir=DIR    directory qmail is locted (e.g. /var/qmail)
+   --upgrade         upgrade existing installation
+                      (default when no prefix/mandir/scriptdir specified)
+   --help            show help message
+
+2. make
+
+3. make install
+

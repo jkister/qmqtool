@@ -1,0 +1,56 @@
+#
+# contributed by Jeremy Kister with the qmqtool package
+#
+
+target	--default--
+	target-type		= mail-stats
+	snmp-host		= %auto-target-name%
+	snmp-community	=	public
+	directory-desc  =       "Mail Server Queue statistics"
+
+OID     mailServerLocalRcpts           1.3.6.1.4.1.18689.1.69.101.1
+OID     mailServerRemoteRcpts          1.3.6.1.4.1.18689.1.69.101.2
+OID     mailServerNonPreProcessed      1.3.6.1.4.1.18689.1.69.101.3
+OID     mailServerTotal						1.3.6.1.4.1.18689.1.69.101.4
+
+datasource	mailServerLocalRcpts
+	ds-source = snmp://%snmp%/mailServerLocalRcpts
+	rrd-ds-type	=	GAUGE
+
+datasource	mailServerRemoteRcpts
+	ds-source = snmp://%snmp%/mailServerRemoteRcpts
+	rrd-ds-type	=	GAUGE
+
+datasource	mailServerNonPreProcessed
+	ds-source = snmp://%snmp%/mailServerNonPreProcessed
+	rrd-ds-type	=	GAUGE
+
+datasource	mailServerTotal
+	ds-source = snmp://%snmp%/mailServerTotal
+	rrd-ds-type	=	GAUGE
+
+targetType	mail-stats
+	ds	=	"mailServerLocalRcpts, mailServerRemoteRcpts, mailServerNonPreProcessed, mailServerTotal"
+
+
+graph   --default--
+        y-axis  =   "# of emails"
+        units   =       "emails"
+        # cut off spikes above 5 seconds
+        # y-max =       30
+
+graph mailServerLocalRcpts
+        legend	= "Local"
+	draw-as = "LINE2"
+
+graph mailServerRemoteRcpts
+        legend	= "Remote"
+	draw-as = "LINE2"
+
+graph mailServerNonPreProcessed
+	legend	= "Todo"
+	draw-as	= "LINE2"
+
+graph mailServerTotal
+	legend	= "Total"
+	draw-as	= "LINE2"

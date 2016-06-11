@@ -1,0 +1,202 @@
+#!/bin/sh
+
+# tiny configure script for qmqtool
+# we're in the major league now
+# Copyright Jeremy Kister 2009.01.23 
+# http://jeremy.kister.net/code/qmqtool/
+
+VERSION=1.15
+
+echo " "
+
+while test $# -gt 0 ; do
+	case $1 in 
+		--*=*) arg=`echo $1 | sed 's/.*=//'` ;;
+		*) arg= ;;
+	esac
+
+	case $1 in
+		--help)
+			cat <<EOM
+the following syntax to ./configure is supported:
+
+   --prefix=PREFIX      install architecture-independent files in PREFIX
+                           [/usr/local]
+   --mandir=DIR         man documentation [PREFIX/man]
+   --scriptdir=DIR      qmqtool script [PREFIX/script]
+
+   --perl=PERL          full path to perl [/usr/local/bin/perl]
+   --qmaildir=DIR       directory qmail is locted [/var/qmail]
+   --upgrade            upgrade existing installation
+                          (default when no prefix/mandir/scriptdir specified)
+   --help               show help message
+
+EOM
+			exit;
+		;;
+		--upgrade)
+			upgrade=1
+		;;
+	   --perl*)
+			if [ "$arg" ]; then
+				if [ -x "$arg" ] ; then
+					perl=$arg
+				else
+					echo "*** PERL: $arg is not executable"
+					sleep 1
+				fi
+			fi
+		;;
+	   --prefix*)
+			if [ "$arg" ]; then
+				if [ -d "$arg" ] ; then
+					prefix=$arg
+				else
+					echo "*** PREFIX: $arg is not a directory"
+					sleep 1
+				fi
+			fi
+		;;
+		--mandir*)
+			if [ "$arg" ]; then
+				if [ -d "$arg" ] ; then
+					mandir=$arg
+				else
+					echo "*** MANDIR: $arg is not a directory"
+					sleep 1
+				fi
+			fi
+		;;
+		--scriptdir*)
+			if [ "$arg" ]; then
+				if [ -d "$arg" ] ; then
+					scriptdir=$arg
+				else
+					echo "*** SCRIPTDIR: $arg is not a directory"
+					sleep 1
+				fi
+			fi
+		;;
+	   --qmaildir*)
+			if [ "$arg" ]; then
+				if [ -d "$arg" ] ; then
+					qmaildir=$arg
+				else
+					echo "*** QMAILDIR: $arg is not a directory"
+					sleep 1
+				fi
+			fi
+		;;
+		*)
+			echo "unknown argument: $1"
+			exit 1
+	;;
+	esac
+	shift
+done
+
+for tool in ls grep ; do
+	$tool $0 $0 >/dev/null 2>&1
+	if [ $? -gt 0 ] ; then
+		echo "$tool isn't in your path??  qmqtool will need that changed."
+		exit 1
+	fi
+done
+
+	
+if [ ! -x "$perl" ] ; then
+	for dir in /usr/local/bin /usr/bin /bin ; do
+		if test -f $dir/perl ; then
+			perl=$dir/perl
+			break
+		fi
+	done
+	if [ ! -x "$perl" ] ; then
+		echo "could not find perl: specify --perl="
+		exit 1
+	fi
+fi
+
+if [ ! -d "$qmaildir" ] ; then
+	if test -d /var/qmail ; then
+		qmaildir=/var/qmail
+	else
+		echo "could not find qmail directory: specify --qmaildir="
+		exit 1
+	fi
+fi
+
+if [ ! "$prefix" ] && [ ! "$scriptdir" ] && [ ! "$mandir" ] ; then
+	exscr="`which qmqtool 2>/dev/null`"
+	if [ -x "$exscr" ] ; then
+		scriptdir="`echo $exscr | sed 's#/qmqtool$##'`"
+	fi
+	manpath="`echo $MANPATH | sed 's/:/ /g'`"
+	for dir in $manpath ; do
+		if [ -f "$dir/man8/qmqtool.8" ] ; then
+			mandir=$dir
+		fi
+	done
+fi
+if [ ! "$prefix" ] ; then
+	prefix="/usr/local"
+fi
+if [ ! "$scriptdir" ] ; then
+	scriptdir="$prefix/script"
+fi
+if [ ! "$mandir" ] ; then
+	mandir="$prefix/man"
+fi
+
+cat <<EOM
+
+found perl: $perl
+found qmail directory: $qmaildir
+qmqtool will be installed in: $scriptdir
+documentation will be installed in $mandir
+ 
+if any of these values need changing, try ./configure --help
+ 
+Making sure this package is intact..
+EOM
+
+$perl -wTc src/qmqtool
+if [ $? = 0 ] ; then
+	echo "...done."
+else
+	echo "problem with package - download from http://jeremy.kister.net./code/qmqtool/"
+	exit 1
+fi
+echo "Writing Makefile..."
+
+(
+	echo PERL=$perl
+	echo QMAIL=$qmaildir
+	echo SCRIPTDIR=$scriptdir
+	echo MANDIR=$mandir
+
+	cat <<EOM
+
+qmqtool: Makefile src/qmqtool
+	@sed "s#__QMAILDIR__#$qmaildir#g;s#__PERL__#$perl#g;s#__VERSION__#$VERSION#g;" src/qmqtool > qmqtool
+	@cp src/qmqtool.8 qmqtool.8
+
+install: qmqtool
+	-mkdir -p $scriptdir
+	cp qmqtool $scriptdir
+	chown 0 $scriptdir/qmqtool
+	chmod 755 $scriptdir/qmqtool
+	-mkdir -p $mandir/man8/
+	cp qmqtool.8 $mandir/man8/
+	chown 0 $mandir/man8/qmqtool.8
+	chmod 744 $mandir/man8/qmqtool.8
+
+clean:
+	-rm Makefile qmqtool qmqtool.8
+
+EOM
+
+) > Makefile
+
+echo " "
+echo "now type 'make' and then 'make install'"

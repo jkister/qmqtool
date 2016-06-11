@@ -1,0 +1,32 @@
+
+	Group "Server1" {
+		Group "Queue" {
+			hostname:       server1.example.com
+			graph:		yes	#optionally, highly recommended
+			barstyle:	none	#optionally, highly recommended (only if graphing)
+			Service UDP/SNMP {
+                uname:      local
+				label:		local
+				maxvalue:   100
+				oid:		.1.3.6.1.4.1.4502.1.69.4502.69.101.1
+				messagedn:  too many msgs to local rcpts on %o{ip::hostname}
+				messageup:  %o{ip::hostname} local rcpts ok
+			}
+			Service UDP/SNMP {
+				uname:		remote
+				label:		remote
+				maxvalue:   1200
+				oid:		.1.3.6.1.4.1.4502.1.69.4502.69.101.2
+				messagedn:  too many msgs to remote rcpts on %o{ip::hostname}
+				messageup:  %o{ip::hostname} remote rcpts ok
+			}
+			Service UDP/SNMP {
+				uname:		todo
+				label:		todo
+				maxvalue:   20
+				oid:		.1.3.6.1.4.1.4502.1.69.4502.69.101.3
+				messagedn:  too many msgs todo on %o{ip::hostname}
+				messageup:  %o{ip::hostname} todo ok
+			}
+		}
+	}

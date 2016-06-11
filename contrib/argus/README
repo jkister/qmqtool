@@ -1,0 +1,11 @@
+
+Simply add the line:
+exec .1.3.6.1.4.1.18689.1.69 qcheck /script/qmqtool -s -Q
+to the end of your Net-SNMP's /usr/local/share/snmp/snmpd.conf file,
+accounting for which path you've placed the qmqtool script in.
+
+go get argus, (http://argus.tcp4me.com), install and configure it.
+
+copy the config in contrib/argus/config into your config. Optionally,
+uncomment "graph: yes" to enable graphing and, optionally,
+"barstyle: none" to make the results more clear.

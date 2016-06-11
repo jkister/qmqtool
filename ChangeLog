@@ -1,0 +1,152 @@
+1.15   * detect if ls and grep are in path at configure time
+       * added a man page in v1.14
+       * more support for bigtodo (like mediatemple provisions)
+
+1.14   * changed english and added Total on qmqtool -s
+       * added more stats with qmqtool -s -V
+       * modified some regexs to be arithmetic instead
+       * changed string finding code:
+         increased speed
+         removed fallback routine
+         use grep -E (egrep) when /pattern/ is used
+         support case insensitive search with /pattern/i
+       * rely on PATH instead of statically searching
+       * improved queue consistency check
+       * -[lRTLx] /displays/ calculated size
+       * added -x feature for extended information on a message
+       * created ./configure ; make ; make install process
+         (even though we're just a light perl script)
+
+1.13   * micro optimizations
+       * refactored code that perl -w complained about
+       * fixed todo/intd/bounce mkdir bug when restoring a queue
+         (Thanks Josef Bergmann!)
+
+1.12   * add -S for seeing bytes queued per dest ipaddr (similar to -i)
+
+1.11   * declare messages only in mess/ rogue during consistency check
+       * support verbose (-V) with -i
+       * decided not to implement "holding queue"
+
+1.10   * fixed envelope recipient statuses using -L and -R
+         (incorrectly interpreted qmail-remote documentation as
+          being correct for /var/qmail/queue/remote/x/y)
+
+1.09   * allowed -Q with -o and -f (prints the number of messages
+         found, instead of a list of messages found)
+       * removed verbose output from -e and -u (when no verbose output
+         was asked for, and no messages in queue)
+       * todo messages can no longer be expired (we really deleted
+         them anyway)
+       * fixed problem where -f 'this|or|that' didnt work if using [a
+         capable] grep
+
+1.089  * fixed grep bug re-introduced in 1.08 (that was accounted
+         for in 1.04) - searching through big queues
+         (Thanks, Paul Annesley!)
+       * fixed bug in todo statistics (accidentaly multiplied todo
+         messages by conf-split)
+       * changed behavior of qmqtool -i -Q when no messages queued
+         (previously reported "no messages in queue" instead of "0")
+
+1.08   * fixed bug causing both grep and internal searching routine
+         to sometimes be ran while using -f (was a huge slowdown -
+         evident since v1.04)
+       * prefer /usr/local/bin/grep over /bin/grep -- otherwise use
+         internal searching routine 
+       * removed taint code that causes some versions of Perl to
+         segfault while expiring over 6128 messages at a time
+       * modified several taint regexs to run faster
+
+1.07   * general code speedup
+       * built internal sorting mechanism to elminate "sort" 
+         command dependancy (for while using -i)
+       * "grep" and "ps" are no longer searched for, they must
+         be specified at the top of qmqtool.
+       * moved from http://jeremy.kister.net/code/perl/qmqtool/ to
+         http://jeremy.kister.net/code/qmqtool/
+
+1.061  * removed perl 5.6+ dependancy, allowing 5.x compatibility.
+
+1.06   * added option to only show messages older than -o hours (for
+         expiring, unexpiring, and deleting)
+       * added -w option to conjoin -v for viewing the whole message
+         (instead of the first 100 lines)
+       * fixed queue restore logic to work all of the time
+         (with 0 bug reports, i guess no one restores their queues...)
+       * updated queue integrity checking logic
+       * updated logic surrounding queue basics
+         (inode % conf-split = split-subdir)
+       * changed prime number checking method from regexp to math
+
+1.05   * dealt with grep finding binary data in queued messages
+         (e.g. null character)
+
+1.041  * check for queue life time in $qmail/control/queuelifetime
+         instead of assuming 2 weeks
+       * adjustments to queue restore logic (queue != maildir :) )
+
+1.04   * added 'qmail' variable for installs not homed in /var/qmail
+       * overhauled delete, expire, unexpire, and find functionality
+         to deal with very large queues (>20,000 or so messages)
+       * allowed combinations of previously seperate syntax, such as:
+         qmqtool -e -f 'invoked for bounce'
+         (qmqtool -e `qmqtool -f 'STRING'` no longer recommended)
+       * most -f code moved into find_msgs sub
+       * fixed -f grep functionality when only 1 message in queue
+       * -f code reverts to internal searching routine automatically,
+         when/if grep fails.
+       * fixed bogus 'not found' errors while expiring some messages
+       * changed several things that perl -wTc complained about,
+         and re-factored -f & -[lLRT]Q output code to be more perlish.
+         (Thanks, Gary Richardson!!)
+
+1.03   * fixed bug causing unexpire not to work correctly on all messages
+
+1.02b  * fixed bug with new grep functionality when searching for a
+         multi-word string
+
+1.02a  * fixup on new grep functionality problem that surfaces on
+         some OSes
+
+1.02   * we try to utilize the 'grep' command for -f (much faster than
+         perl for big queues)
+       * stay quiet while deleting/expiring/unexpiring messages unless
+         -V specified  
+       * find_tools sub added to reduce repeating code
+       * find_tools searches $PATH before set of static directories
+
+1.01   * fixed up -E and -U functionality
+
+1.0    * added -Q functionality to conjoin -l -L -R and -T
+
+1.0RC1 * revamped todo handling to fix "cannot open/stat" warnings
+         using -T
+
+0.87b  * limited displayed fields to ~50 characters while using -l,
+         -L, -R, and -T
+       * added zero byte file size checking while using -c
+
+0.86b  * included inode check of files in queue/mess while using -c
+
+0.85b  * added ability to traverse sending path using -i (-nN)
+       * added FAQ (although there's never been a question asked) :)
+
+0.80b  * added queue backup and restore functions
+       * minor ajustments to queue manipulation logic
+
+0.73b  * fixed typo using -i (reported 172.0.0.2 instead of 127.0.0.2)
+         Thanks James Cook!!
+
+0.72b  * fixed informational bug while reporting what directories a
+         file was removed from using -d
+       * added -i option to show how many messages are queued per ip
+       * added support for multiple envelope recipients while viewing
+         queue
+
+0.65b  * Added 'delete' functionality
+       * Corrected syntax reporting in -v, -e, and -u
+        (exited instead of printing error on some syntax)
+       * Corrected minor typos in informational only text
+
+0.64b  * Initial Testing Release

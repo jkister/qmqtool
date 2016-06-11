@@ -1,0 +1,1042 @@
+#!__PERL__
+
+# qmqtool: Copyright 2003-2016 Jeremy Kister
+# Released under Perl's Artistic License.
+# Function: view and/or safely manipulate the contents of a qmail queue.
+# Author: Jeremy Kister http://jeremy.kister.net./
+
+use strict;
+use Getopt::Std;
+
+my $qmail = '__QMAILDIR__';
+# keep ps/bigtodo dynamic - one nfs homed script can work on any arch
+my $ps = ($^O eq 'solaris') ? '/usr/ucb/ps auxww' : 'ps auxww';
+my $bigtodo = ( -d "${qmail}/queue/todo/0" ) ? 1 : 0; # more implemented, little demand.
+
+
+my %opt;
+# must play with @ARGV directly because Getopt doesnt have a xx: (-x with or without an arg)
+# sometimes we do '-d 123' and sometimes we do '-d -f foo'
+my $n = 0;
+for my $arg (@ARGV){
+    for my $l (qw/d e u x/){
+        if($arg eq "-${l}"){
+            splice @ARGV, $n, 1; # or Getopt will complain
+            if($ARGV[$n] =~ /-[ofVQ]/){ # only valid flags to -[deux]
+                # this arg is for something else
+                $opt{$l} = 1;
+            }else{
+                # this arg is for me
+                if($ARGV[$n] =~ /[^\d,]/ || $ARGV[$n] =~ /,,/){
+                    die "invalid syntax to -${l}\n";
+                }else{
+                    $opt{$l} = $ARGV[$n];
+                    splice @ARGV, $n, 1; # Getopt, again
+                }
+            }
+            last; # only one -[deux] per run
+        }
+    }
+    $n++;
+}
+
+getopts('hlLRSTsQcrin:wx:v:Vf:o:E:U:B:', \%opt);
+
+if($opt{l}){
+    listmsgs('all');
+}elsif($opt{L}){
+    listmsgs('local');
+}elsif($opt{R}){
+    listmsgs('remote');
+}elsif($opt{T}){
+    $bigtodo ? listmsgs('todo') : listtodomsgs('todo');
+}elsif($opt{x}){
+    my $msgs = ($opt{f} || $opt{o}) ? build_msgs_list($opt{f},$opt{o}) : $opt{x};
+
+    for my $msg (split /,/, $msgs){
+        die "argument to -x must be an integer.\n" unless($msg eq int($msg));
+        my $subdir = ($msg % getsplit());
+        my $dir = (-f "$qmail/queue/remote/$subdir/$msg") ? 'remote' :
+                  (-f "$qmail/queue/local/$subdir/$msg") ? 'local' :
+                  (-f "$qmail/queue/todo/$msg") ? 'todo' :
+                  die "cannot find message number $msg\n";
+        msgprop($dir,$subdir,$msg);
+    }
+}elsif($opt{B}){
+    check_daemons(); # make sure qmail-send/qmail-smtpd is not runnning
+    my $backup = $qmail . '/queue.backup' ;
+    my @subdirs = getsplit();
+
+    if($opt{B} eq 'b'){
+        die "error: $backup already exists.\n" if(-d $backup);
+        mkdir($backup,0700) || die "cannot mkdir $backup: $!\n";
+        for my $dir (qw/mess remote local info/){
+            mkdir("${backup}/${dir}",0700);
+            for my $subdir (@subdirs){
+                print "backing up $dir/$subdir\n" if($opt{V});
+                mkdir("${backup}/${dir}/${subdir}",0700);
+                opendir(D, "${qmail}/queue/${dir}/${subdir}/") || die "cannot open queue/$dir/$subdir/: $!\n";
+                for my $file (grep {!/^\./} readdir D){
+                    open(F, "${qmail}/queue/${dir}/${subdir}/${file}") || die "cannot open queue/$dir/$subdir/$file: $!\n";
+                    open(N, ">${backup}/${dir}/${subdir}/${file}") || die "cannot write to $backup/$dir/$subdir/$file: $!\n";
+                    while(<F>){
+                        print N;
+                    }
+                    close N;
+                    close F;
+                }
+                closedir D;
+            }
+        }
+
+        for my $dir (qw/todo intd bounce/){
+            print "backing up $dir\n" if($opt{V});
+            mkdir("${backup}/${dir}",0700);
+            opendir(D, "${qmail}/queue/${dir}/") || die "cannot open queue/$dir/: $!\n";
+            for my $file (grep {!/^\./} readdir D){
+                open(F, "${qmail}/queue/${dir}/${file}") || die "cannot open queue/$dir/$file: $!\n";
+                open(N, ">${backup}/${dir}/${file}") || die "cannot write to $backup/$dir/$file: $!\n";
+                while(<F>){
+                    print N;
+                }
+                close N;
+                close F;
+            }
+        }
+    }elsif($opt{B} eq 'r'){
+        my(%owner,%uid,%gid);
+        $owner{info} = $owner{local} = $owner{remote} = $owner{bounce} = 'qmails';
+        $owner{mess} = $owner{todo} = $owner{intd} = 'qmailq';
+
+        for my $user (qw/qmailq qmails/){
+            ($uid{$user},$gid{$user}) = (getpwnam($user))[2,3];
+        }
+
+        my $split = @subdirs; # we assume backed up queue is split the same as queue
+        for my $subdir (@subdirs){
+            print "restoring $subdir\n" if($opt{V});
+            opendir(D, "${backup}/mess/${subdir}/") || die "cannot open ${backup}/mess/$subdir/: $!\n";
+            for my $file (grep {!/^\./} readdir D){
+                my $new = $^T . '.' . rand(99);
+                open(N, ">${qmail}/queue/pid/${new}") || die "cannot write to queue/pid/$new: $!\n";
+                close N;
+                my $inode = (stat("${qmail}/queue/pid/${new}"))[1]; # pid and mess must be on same slice
+                my $nsdir = ($inode % $split);
+                rename("${qmail}/queue/pid/${new}","${qmail}/queue/mess/${nsdir}/${inode}") ||
+                  die "cannot rename queue/pid/$new to queue/mess/$nsdir/$inode: $!\n";
+                chmod(0640,"${qmail}/queue/mess/${nsdir}/${inode}") ||
+                  die "couldnt chmod queue/mess/$nsdir/$inode: $!\n";
+                chown($uid{$owner{mess}},$gid{$owner{mess}},"${qmail}/queue/mess/${nsdir}/${inode}") ||
+                  die "couldnt chown queue/mess/$subdir/$inode: $!\n";
+
+                open(F, "${backup}/mess/${subdir}/${file}") || die "cannot open $backup/mess/$subdir/$file: $!\n";
+                open(N, ">>${qmail}/queue/mess/${nsdir}/${inode}") || die "cannot append to mess/$nsdir/$inode: $!\n";
+                while(<F>){
+                    print N;
+                }
+                close N;
+                close F;
+
+                for my $dir (qw/remote local info/){
+                    if(-f "${backup}/${dir}/${subdir}/${file}"){
+                        rename("${backup}/${dir}/${subdir}/${file}","${qmail}/queue/${dir}/${nsdir}/${inode}") ||
+                          die "cannot rename $backup/$dir/$subdir/$file to queue/$dir/$nsdir/$inode: $!\n";
+                        chmod(0600,"${qmail}/queue/${dir}/${nsdir}/${inode}") ||
+                          die "could not chmod queue/$dir/$nsdir/$inode: $!\n";
+                        chown($uid{$owner{$dir}},$gid{$owner{$dir}},"${qmail}/queue/${dir}/${nsdir}/${inode}") ||
+                          die "could not chown queue/$dir/$nsdir/$inode: $!\n";
+                    }
+                }
+                for my $dir (qw/todo intd bounce/){
+                    if(-f "${backup}/${dir}/${file}"){
+                        rename("${backup}/${dir}/${file}","${qmail}/queue/${dir}/${inode}") ||
+                          die "could not rename $backup/$dir/$file to queue/$dir/$inode: $!\n";
+                        chmod(0600,"${qmail}/queue/${dir}/${inode}") ||
+                          die "could not chmod queue/$dir/$inode: $!\n";
+                        chown($uid{$owner{$dir}},$gid{$owner{$dir}},"${qmail}/queue/${dir}/${inode}") ||
+                          die "could not chown queue/$dir/$inode: $!\n";
+                    }
+                }
+
+            }
+        }
+        unless($opt{Q}){
+            print "you must now start qmail-send: for a LWQ installation, run: svc -u /service/qmail-send\n";
+        }
+    }else{
+        syntax();
+    }
+}elsif($opt{s}){
+    my (%msgs,%deliveries);
+    my @subdirs = getsplit();
+    for my $dir (qw/mess todo remote local/){
+        $msgs{$dir} = $deliveries{$dir} = 0;
+        for my $subdir (@subdirs){
+            my $qdir = "${qmail}/queue/${dir}/";
+            $qdir .= "${subdir}/" unless($dir eq 'todo' && (! $bigtodo));
+            opendir(S, $qdir) || die "cannot open $qdir: $!\n";
+            if($opt{V} && ($dir ne 'mess')){
+                for my $file (grep {!/^\./} readdir S){
+                    if(open(INTD, "$qmail/queue/intd/$file")){
+                        chop(my $data=<INTD>);
+                        close INTD;
+                        my @x = split(/\0/, $data);
+                        $deliveries{todo} += (@x - 3);
+                    }elsif(open(FILE, "$qdir/$file")){
+                        chop(my $recips=<FILE>);
+                        close FILE;
+                        my @x = split(/\0/, $recips);
+                        $deliveries{$dir} += @x;
+                    }
+                    $msgs{$dir} ++;
+                }
+            }else{
+                $msgs{$dir} += (grep {!/^\./} readdir S);
+            }
+            closedir S;
+
+            last if($dir eq 'todo' && (! $bigtodo));
+        }
+    }
+
+    if($opt{Q}){
+        print "$msgs{local}\n$msgs{remote}\n$msgs{todo}\n$msgs{mess}\n";
+        if($opt{V}){
+            my $t; for(values %deliveries){ $t += $_ };
+            print "$deliveries{local}\n$deliveries{remote}\n$t\n";
+        }
+    }else{
+        print "Messages with local recipients: $msgs{local}\n",   # S5
+              "Messages with remote recipients: $msgs{remote}\n", # S5
+              "Messages not yet preprocessed: $msgs{todo}\n",     # S4
+              "Total messages in queue: $msgs{mess}\n";    # S1,2,3,4,5
+        if($opt{V}){
+            my $t; for(values %deliveries){ $t += $_ };
+            print "Local deliveries remaining: $deliveries{local}\n",
+                  "Remote deliveries remaining: $deliveries{remote}\n",
+                  "Total deliveries remaining: $t\n";
+        }
+    }
+}elsif($opt{v}){
+    if($opt{v} eq int($opt{v})){
+        exit if($opt{v} == 0); # qmqtool -f 'unfound string' gives 0
+        my @subdirs = getsplit();
+        my $split = @subdirs;
+        my $subdir = ($opt{v} % $split);
+
+        if(open(F, "${qmail}/queue/mess/${subdir}/$opt{v}")){
+            my ($n,@msg);
+            # buffering seems to behave better when message is delivered while reading it
+            while(<F>){
+                unless($opt{w}){
+                    last if($n == 100);
+                    $n++;
+                }
+                # could chop $_ after a certain length
+                push @msg, $_;
+            }
+            close F;
+            if(@msg){
+                print "MESSAGE NUMBER $opt{v}:\n\n";
+                print for(@msg);
+            }
+            if($n == 100){
+                print "----> qmqtool: remainder of message has been suppressed.\n\n";
+            }
+        }else{
+            print "Message number $opt{v} not found in the queue.\n";
+        }
+    }else{
+        print "syntax error: argument to -v must be an integer.\n";
+    }
+}elsif($opt{e}){
+    my $msgs = ($opt{f} || $opt{o}) ? build_msgs_list($opt{f},$opt{o}) : $opt{e};
+    if($msgs == 0){
+        print "0\n" if($opt{V});
+    }else{
+        changetime('expiring',$msgs);
+    }
+}elsif($opt{u}){
+    my $msgs = ($opt{f} || $opt{o}) ? build_msgs_list($opt{f},$opt{o}) : $opt{u};
+    if($msgs == 0){
+        print "0\n" if($opt{V});
+    }else{
+        changetime('resetting',$msgs);
+    }
+}elsif($opt{d}){
+    my $msgs = ($opt{f} || $opt{o}) ? build_msgs_list($opt{f},$opt{o}) : $opt{d};
+    if($msgs == 0){
+        print "0\n" if($opt{V});
+    }else{
+        rm_files($msgs);
+    }
+}elsif($opt{f} && $opt{o}){
+    print build_msgs_list($opt{f},$opt{o}) . "\n";
+}elsif($opt{f}){ # we just dont support -f 0 - easier than defined everywhere
+    if($opt{Q}){
+        my $num = find_msgs_bystring($opt{f});
+        print "${num}\n";
+    }else{
+        print join(',', sort { $a <=> $b } find_msgs_bystring($opt{f})) . "\n";
+    }
+}elsif($opt{o}){
+    if($opt{Q}){
+        my $num = find_msgs_byage($opt{o});
+        print "${num}\n";
+    }else{
+        print join(',', sort { $a <=> $b } find_msgs_byage($opt{o})) . "\n";
+    }
+}elsif($opt{E}){
+    changetimebulk('expired',$opt{E});
+}elsif($opt{U}){
+    changetimebulk('reset',$opt{U});
+}elsif($opt{c} || $opt{r}){
+    checkqueue($opt{r});
+}elsif($opt{i} || $opt{S}){
+    my %hash;
+    my @subdirs = getsplit();
+
+    for my $subdir (@subdirs){
+        opendir(D, "${qmail}/queue/mess/${subdir}/") || die "cannot open queue/mess/$subdir/: $!\n";
+        for my $file (grep {!/^\./} readdir D){
+            if(open(F, "${qmail}/queue/mess/${subdir}/${file}")){
+                my ($ip,$level);
+                while(<F>){
+                    last if(/^$/); # we only want the header
+                    if(/^Received\s*:\s*from.+\(HELO.+\).*[^\d]+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/){ # ehlo still shows HELO
+                        $ip = $1;
+                        if($opt{n}){
+                            $level++;
+                            if($level == $opt{n}){
+                                if($opt{S}){
+                                    $hash{$ip} += getbytes($subdir,$file);
+                                }else{
+                                    push @{$hash{$ip}}, $file;
+                                }
+                                last;
+                            }
+                        }else{
+                            if($opt{S}){
+                                $hash{$ip} += getbytes($subdir,$file);
+                            }else{
+                                push @{$hash{$ip}}, $file;
+                            }
+                            last;
+                        }
+                    }
+                }
+                close F;
+                unless($ip){
+                    # via qmail-inject or some such
+                    if($opt{S}){
+                        $hash{'127.0.0.2'} += getbytes($subdir,$file);
+                    }else{
+                        push(@{$hash{'127.0.0.2'}}, $file);
+                    }
+                }
+            }
+        }
+        closedir D;
+    }
+    if(%hash){
+        if($opt{Q}){
+            # just print the highest
+            my $highest=0;
+            if($opt{S}){
+                my $ip = (sort { $hash{$b} <=> $hash{$a} } keys %hash)[0];
+                print "${ip}\n";
+            }else{
+                for my $key (keys %hash){
+                    if(@{$hash{$key}} > $highest){
+                        $highest = @{$hash{$key}};
+                    }
+                }
+                print "${highest}\n";
+            }
+        }else{
+            if($opt{S}){
+                for(map { $_->[0] }
+                      sort { $hash{$a->[0]} <=> $hash{$b->[0]} ||
+                           $a->[1] <=> $b->[1] ||
+                           $a->[2] <=> $b->[2] ||
+                           $a->[3] <=> $b->[3] ||
+                           $a->[4] <=> $b->[4] }
+                       map { [ $_, split /\./ ] } keys %hash){
+                        print "$hash{$_} $_\n";
+                }
+            }else{
+                for(map { $_->[0] }
+                      sort { @{$hash{$a->[0]}} <=> @{$hash{$b->[0]}} ||
+                           $a->[1] <=> $b->[1] ||
+                           $a->[2] <=> $b->[2] ||
+                           $a->[3] <=> $b->[3] ||
+                           $a->[4] <=> $b->[4] }
+                       map { [ $_, split /\./ ] } keys %hash){
+                        my $num = @{$hash{$_}};
+                        print "$num $_";
+                        print ' ', join(',',@{$hash{$_}}) if($opt{V});
+                        print "\n";
+                }
+            }
+        }
+    }else{
+        print "0\n";
+    }
+}else{
+    syntax();
+}
+
+sub getsplit {
+    opendir(D, "${qmail}/queue/info/") || die "cannot open queue/info: $!\n";
+    my @subdirs = grep {!/^\./} readdir D;
+    closedir D;
+    return(@subdirs);
+}
+
+sub getbytes {
+    my $subdir = shift;
+    my $file = shift || die "getbytes syntax error\n";
+
+    if(my $bytes = (stat("${qmail}/queue/mess/${subdir}/${file}"))[7]){
+        if(open(FILE, "${qmail}/queue/remote/${subdir}/${file}") ||
+           open(FILE, "${qmail}/queue/local/${subdir}/${file}") ||
+           open(FILE, "${qmail}/queue/todo/${file}") ){
+            my $i;
+            for my $r (split /\0/, <FILE>){
+                $i++ if(substr($r,0,1) eq 'T'); # T is pending delivery, D is delivered
+            }
+            close FILE;
+            $bytes *= $i;
+        }
+
+        return($bytes);
+    }
+}
+
+sub check_daemons {
+
+    # must make sure all queue processing agents are down (qmail-todo dies with qmail-send)
+    if(open(PS, "$ps |")){
+        while(<PS>){
+            if(/(?:qmail[sdrl]|vpopmail)\s+(\d+).+[\s\/]qmail-(?:send|smtpd|remote|local)/){
+                next if(/multilog\s+/); # some log to /var/log/qmail/qmail-send/
+                die "you must stop qmail-send and qmail-smtpd before this program can continue (PID [$1] running).\n",
+                    "for a LWQ installation, run: svc -d /service/qmail-send /service/qmail-smtpd\n",
+                    "others may be able to run: kill -9 `$ps | awk '/qmail-send|qmail-smtpd/ { print \$1 }'`\n";
+            }
+        }
+        close PS;
+    }else{
+        die "cannot open process list (problem with ps?): $!\n";
+    }
+}
+
+sub checkqueue {
+    my $mode = shift;
+    my @subdirs = getsplit();
+    my $split = @subdirs;
+
+    # make sure directories are contiguous and start from zero
+    my $expect = 0;
+    for my $dir (sort { $a <=> $b } @subdirs){
+        unless($dir eq int($dir)){
+            die "queue layout is corrupt: $dir is not an integer.\n",
+                 "try removing /var/qmail/queue/${dir}.\n";
+        }
+        unless($dir == $expect){
+            die "queue layout is corrupt: $dir wasnt expected until after $expect.\n",
+                "try 'make setup check' from the qmail-1.03 source directory.\n";
+        }
+        $expect++;
+    }
+
+    my $count = 2;
+    my $hd = int($split/2);
+    while($count <= $hd){
+        if(($split % $count) == 0){
+            die "queue layout is corrupt: the number of subdirectories in ${qmail}/queue/info is not prime.\n",
+                "try 'make setup check' from the qmail-1.03 source directory.\n";
+        }else{
+            $count++;
+        }
+    }
+            
+    check_daemons();
+
+    #S3. +mess +intd -todo -info -local -remote -bounce
+    #S4. +mess ?intd +todo ?info ?local ?remote -bounce (queued)
+    #S5. +mess -intd -todo +info ?local ?remote ?bounce (preprocessed)
+    #  todo/ intd/ bounce/ (check in pid/ ?)  remote/n mess/n local/n  info/n
+
+    my(%tree,%rogue);
+
+    # find all messages in mess, make sure their inodes match their filename
+   # and inode % conf-split = subdir
+    # and has matching (intd, todo, or info);
+    for my $subdir (@subdirs){
+        opendir(D, "${qmail}/queue/mess/${subdir}/") || die "cannot open queue/mess/$subdir: $!\n";
+        for my $file (grep {!/^\./} readdir D){
+            my ($inode,$ctime) = (stat("${qmail}/queue/mess/${subdir}/${file}"))[1,10];
+            if(($inode == $file) && (-s "${qmail}/queue/mess/${subdir}/${file}") && ($inode % $split == $subdir) &&
+               ((-s "${qmail}/queue/intd/${file}") || (-s "${qmail}/queue/todo/${file}") || (-s "${qmail}/queue/info/${subdir}/${file}")) ){
+                $tree{mess}{$file} = $subdir;
+                $tree{time}{$file} = $ctime;
+            }else{
+                print "$file is rogue (test1a).\n" if($opt{V});
+                $rogue{$file} = $subdir;
+            }
+        }
+        closedir D;
+    }
+
+    # find messages in intd:
+    #  make sure each has a matching mess/,
+    #  never in bounce
+    #    if not in todo, no other match
+    opendir(D, "${qmail}/queue/intd/") || die "cannot open queue/intd/: $!\n";
+    for my $file (grep {!/^\./} readdir D){
+        next if($rogue{$file});
+        my $subdir = ($file % $split);
+        if(-f "${qmail}/queue/bounce/${file}"){
+            print "$file is rogue (test2a).\n" if($opt{V});
+            $rogue{$file} = $subdir;
+            next;
+        }
+        unless(exists($tree{mess}{$file})){ # can equal zero
+            print "$file is rogue (test2b).\n" if($opt{V});
+            $rogue{$file} = $subdir;
+            next;
+        }
+        unless(-f "${qmail}/queue/todo/${file}"){
+            my $x;
+            for my $dir (qw/info local remote/){
+                if(-f "${qmail}/queue/${dir}/${subdir}/${file}"){
+                    print "$file is rogue (test2c).\n" if($opt{V});
+                    $rogue{$file} = $subdir;
+                    $x=1;
+                    last;
+                }
+            }
+            next if($x);
+        }
+        $tree{intd}{$file} = 1;
+    }
+    closedir D;
+
+    # find messages in todo: make sure each has a matching mess and no bounce
+    opendir(D, "${qmail}/queue/todo/") || die "cannot open queue/todo/: $!\n";
+    for my $file (grep {!/^\./} readdir D){
+        next if($rogue{$file});
+        if(-f "${qmail}/queue/bounce/${file}"){
+            print "$file is rogue (test3a).\n" if($opt{V});
+            $rogue{$file} = ($file % $split);
+            next;
+        }
+        unless(exists($tree{mess}{$file})){
+            print "$file is rogue (test3b).\n" if($opt{V});
+            $rogue{$file} = ($file % $split);
+            next;
+        }
+        $tree{todo}{$file} = 1;
+    }
+    closedir D;
+
+    # find messages in info, make sure each has a matching mess
+    # if todo, no bounce
+    # if no todo, no intd
+    for my $subdir (@subdirs){
+        opendir(D, "${qmail}/queue/info/${subdir}/") || die "cannot open queue/info/$subdir/: $!\n";
+        for my $file (grep {!/^\./} readdir D){
+            next if($rogue{$file});
+            unless(exists($tree{mess}{$file})){
+                print "$file is rogue (test4a).\n" if($opt{V});
+                $rogue{$file} = $subdir;
+                next;
+            }
+            if(-f "${qmail}/queue/todo/${file}"){
+                if(-f "${qmail}/queue/bounce/${file}"){
+                    print "$file is rogue (test4b).\n" if($opt{V});
+                    $rogue{$file} = $subdir;
+                    next;
+                }
+            }else{
+                if(-f "${qmail}/queue/intd/${file}"){
+                    print "$file is rogue (test4c).\n" if($opt{V});
+                    $rogue{$file} = $subdir;
+                    next;
+                }
+            }
+            $tree{info}{$file} = 1;
+        }
+        closedir D;
+    }
+
+    # find messages in remote and local: make sure each has a mess,
+        # if it has a todo, cant have a bounce
+        # if it has no todo, cant have an intd
+        # cant have duplicate filenames in remote and local
+
+    for my $dir (qw/remote local/){
+        for my $subdir (@subdirs){
+            opendir(D, "${qmail}/queue/${dir}/${subdir}/") || die "cannot open queue/$dir/$subdir: $!\n";
+            for my $file (grep {!/^\./} readdir D){
+                next if($rogue{$file});
+                if($dir eq 'remote'){
+                    # will be built first
+                    $tree{remote}{$file} = 1; # same inode cant be used at the same time
+                }else{
+                    if($tree{remote}{$file}){
+                        print "$file is rogue (test5a).\n" if($opt{V});
+                        $rogue{$file} = $subdir;
+                        next;
+                    }
+                }
+                if(exists($tree{mess}{$file})){
+                    if(-f "${qmail}/queue/todo/${file}"){
+                        if(-f "${qmail}/queue/bounce/${file}"){
+                            print "$file is rogue (test5b).\n" if($opt{V});
+                            $rogue{$file} = $subdir;
+                            next;
+                        }
+                    }else{
+                        if(-f "${qmail}/queue/intd/${file}"){
+                            print "$file is rogue (test5c).\n" if($opt{V});
+                            $rogue{$file} = $subdir;
+                            next;
+                        }
+                    }
+                }else{
+                    print "$file is rogue (test5d).\n" if($opt{V});
+                    $rogue{$file} = $subdir;
+                    next;
+                }
+                $tree{$dir}{$file} = 1;
+            }
+            closedir D;
+        }
+    }
+
+    # messages in S2 or S3 for more than 36 hours are bad as per INTERNALS
+    for my $file (keys %{$tree{mess}}){
+        next if($rogue{$file});
+        # is file more than 36 hours old ?
+        if($tree{time}{$file} < (time() - 129600)){
+            # is file in S4 or S5?
+            my $nuke = 1;
+            for my $dir (qw/todo info local remote bounce/){
+                if($tree{$dir}{$file}){    
+                    $nuke=0; # file is in S4 or S5
+                    last;
+                }
+            }
+            if($nuke){
+                $rogue{$file} = ($file % $split);
+            }
+        }
+    }
+
+    if(%rogue){
+        while(my($file,$subdir) = each %rogue){
+            print "$subdir/$file is rogue\n";
+            if($mode == 1){
+                print "removing $file shrapnel\n";
+                # always unlink all locations
+                unlink("${qmail}/queue/todo/$file","${qmail}/queue/intd/$file","${qmail}/queue/bounce/$file",
+                       "${qmail}/queue/mess/$subdir/$file","${qmail}/queue/info/$subdir/$file",
+                       "${qmail}/queue/remote/$subdir/$file","${qmail}/queue/local/$subdir/$file");
+            }
+        }
+    }else{
+        print "no rogue files found\n" unless($opt{Q});
+    }
+    if($opt{r}){
+        unless($opt{Q}){
+            print "you must now start qmail-send: for a LWQ installation, run: svc -u /service/qmail-send\n";
+        }
+    }
+}
+
+sub rm_files {
+    my $number = shift || die "rm_files syntax error\n";
+    exit if($number == 0); # qmqtool -f 'unfound string' gives 0
+
+    my @subdirs = getsplit();
+    my $split = @subdirs;
+
+    my $restart;
+    for my $file (split(/,/, $number)){
+        my %file;
+        die "syntax error: $number\n" unless($file eq int($file));
+        print "removing message number $file from queue..\n" if($opt{V});
+        # - find messages in all possible locations, even "impossible" ones.
+        $file{todo} = 1 if(unlink("${qmail}/queue/todo/$file"));
+        $file{intd} = 1 if(unlink("${qmail}/queue/intd/$file"));
+        $file{bounce} = 1 if(unlink("${qmail}/queue/bounce/$file"));
+
+        my $subdir = ($file % $split);
+        $file{"mess/$subdir"} = 1 if(unlink("${qmail}/queue/mess/$subdir/$file"));
+        $file{"remote/$subdir"} = 1 if(unlink("${qmail}/queue/remote/$subdir/$file"));
+        $file{"local/$subdir"} = 1 if(unlink("${qmail}/queue/local/$subdir/$file"));
+        $file{"info/$subdir"} = 1 if(unlink("${qmail}/queue/info/$subdir/$file"));
+    
+        if(%file){
+            if($opt{V}){
+                while(my ($key,$value) = each %file){
+                    print "  removed ${key}/${file}\n";
+                    $restart = 1;
+                }
+            }
+        }else{
+            print "  could not find message number $file\n";
+        }
+    }
+    if($restart){
+        print "you must now restart qmail-send: for a LWQ installation, run: svc -du /service/qmail-send\n";
+    }
+}
+
+sub changetime {
+    my ($what,$number) = @_;
+    die "changetime syntax error\n" unless($what && defined($number));
+    exit if($number == 0); # qmqtool -f 'unfound string' gives 0
+
+    my @subdirs = getsplit();
+    my $split = @subdirs;
+
+    my $utime = $^T;
+    if($what eq 'expiring'){
+        if(open(F, "${qmail}/control/queuelifetime")){
+            chomp(my $qlt=<F>);
+            close F;
+            $utime -= $qlt;
+        }else{
+            $utime -= 604800;
+        }
+    }
+    my @files;
+    for my $file (split(/,/, $number)){
+        die "syntax error: $number ($file)\n" unless($file eq int($file));
+        my ($found,$where);
+
+        my $subdir = ($file % $split);
+        if(-f "${qmail}/queue/todo/${file}"){
+            # message is in todo - can not expire
+            print "can not expire messages in todo\n" unless($opt{Q});
+        }elsif(-f "${qmail}/queue/mess/${subdir}/${file}"){
+            print "$what message number $file\n" if($opt{V});
+            push @files, "${qmail}/queue/info/${subdir}/${file}";
+        }else{
+            print "cannot find message number $file\n" unless($opt{Q});
+        }
+    }
+    utime $utime, $utime, @files if(@files);
+}
+
+sub changetimebulk {
+    my ($what,$which) = @_;
+    my $utime = $^T;
+    if($what eq 'expired'){
+        if(open(F, "${qmail}/control/queuelifetime")){
+            chop(my $qlt=<F>);
+            close F;
+            $utime -= $qlt;
+        }else{
+            $utime -= 604800;
+        }
+    }
+    
+    my @queues = ($which eq 'A') ? qw/local remote/ :
+                 ($which eq 'R') ? 'remote' :
+                 ($which eq 'L') ? 'local' :
+     die "changetimebulk syntax error:  use qmqtool -h for more information\n";
+
+    my @subdirs = getsplit();
+    my $split = @subdirs;
+
+    my %num;
+    for my $queue (@queues){
+        $num{$queue} = 0;
+        my @files;
+        for my $subdir (@subdirs){
+            opendir(S, "${qmail}/queue/${queue}/${subdir}/") || die "cannot open $qmail/queue/$queue/$subdir/: $!\n";
+            for my $file (grep {!/^\./} readdir S){
+                push @files, "${qmail}/queue/info/${subdir}/${file}";
+                $num{$queue}++;
+            }
+            closedir S;
+        }
+        utime $utime, $utime, @files if(@files);
+    }
+    if($opt{V}){
+        for my $queue (@queues){
+            print "$what $num{$queue} files that had $queue recipients\n";
+        }
+    }
+}
+
+sub listtodomsgs {
+    if( -d "${qmail}/queue/todo/0" ){
+        listmsgs('todo');
+        return;
+    }
+    my @subdirs = getsplit();
+    my $split = @subdirs;
+    opendir(T, "${qmail}/queue/todo/") || die "cannot open queue/todo: $!\n";
+    if($opt{Q}){
+        my @msgs = (grep {!/^\./} readdir T);
+        @msgs ? print join(',', @msgs) : print '0';
+        print "\n";
+    }else{
+        my $num = 0;
+        for my $file (grep {!/^\./} readdir T){
+            $num++;
+            my $subdir = ($file % $split);
+            if(-f "${qmail}/queue/mess/${subdir}/${file}"){
+                msgprop('todo',$subdir,$file);
+            }
+        }
+        print "Messages not yet preprocessed: ${num}\n";
+    }
+    closedir T;
+}
+
+sub listmsgs {
+    my $where = shift || die "listmsgs syntax error\n";
+    my (@msgs,%num);
+    my @queues = ($where eq 'all') ? qw/local remote/ : $where;
+
+    my @subdirs = getsplit();
+    for my $queue (@queues){
+        $num{$queue} = 0;
+
+        for my $subdir (@subdirs){
+            opendir (S,"${qmail}/queue/${queue}/${subdir}/") || die "cannot open queue/$queue/$subdir/: $!\n";
+            for my $file (grep {!/^\./} readdir S){
+                if($opt{Q}){
+                    push @msgs, $file;
+                }else{
+                    $num{$queue}++;
+                    msgprop($queue,$subdir,$file);
+                }
+            }    
+            closedir S;
+        }
+    }
+    if($opt{Q}){
+        @msgs ?
+            print join(',', @msgs) : print '0';
+        print "\n";
+    }else{
+        for my $queue (@queues){
+            print "Messages ";
+            if($queue eq 'todo'){
+                print "not yet preprocessed: ";
+            }else{
+                print "with $queue recipients: ";
+            }
+            print "$num{$queue}\n";
+        }
+    }
+}
+
+sub msgprop {
+    my ($queue,$subdir,$file) = @_;
+
+    my $bytes = (stat("${qmail}/queue/mess/${subdir}/${file}"))[7] || warn "cannot stat mess/$subdir/$file: $!\n";
+    next unless($bytes);
+    my $size = ($bytes > 1048576) ? sprintf("%.2f",($bytes/1048576)) . "MB ($bytes Bytes)" :
+               ($bytes > 1024) ? sprintf("%.2f",($bytes/1024)) . "KB ($bytes Bytes)" :
+               "$bytes Bytes";
+
+    my (@recips,$es,$er);
+    if($queue eq 'todo'){
+        if(open(I, "${qmail}/queue/intd/${file}")){
+            chop(my $data=<I>);
+            close I;
+            for(split(/\0/, $data)){
+                my $first = substr($_,0,1);
+                if($first eq 'F'){
+                    $es=$_;
+                    substr($es,0,1) = '';
+                }elsif($first eq 'T'){
+                    push @recips, $_;
+                }
+            }
+        }else{
+            warn "cannot open ${qmail}/queue/intd/${file}: $!\n";
+        }
+    }else{
+        if(open(S, "${qmail}/queue/info/${subdir}/${file}")){
+            chop($es=<S>);
+            close S;
+            substr($es,0,1) = '';
+        }
+
+        if(open(R, "${qmail}/queue/${queue}/${subdir}/${file}")){
+            chop(my $recipients=<R>);
+            close R;
+            @recips = split(/\0/, $recipients);
+        }
+    }
+
+    # find the longest recipient to make formatting prettier
+    my $longest = 0;
+    for my $recipient (@recips){
+        my $len = length($recipient);
+        if($len > $longest){
+            $longest = $len;
+        }
+    }
+    if(open(F, "${qmail}/queue/mess/${subdir}/${file}")){
+        print "${file} (${subdir}, ${queue})\n",
+              "  Envelope Sender: ${es}\n";
+        for (@recips){
+            my $l = substr($_,0,1,'');
+            my $status = ($l eq 'D') ? '(Done)' : '(To Be Delivered)';
+            printf ("  Envelope Recipient: %-${longest}s%s\n",$_,$status);
+        }
+        my @fields = qw/Date From To Cc Subject/;
+        my %header = map { $_ => 0 } @fields;
+        
+        while(<F>){
+            chop;
+            if(/^\s*$/){ # really ^$
+                last;
+            }elsif(/^([^\s:]+)\s*:\s?(.{0,50})(.*)/){
+                my $field = ucfirst(lc($1));
+                if(exists($header{$field})){
+                    my $value=$2;
+                    $value .= (length($3) <= 3) ? $3 : '...';
+                    $header{$field} = $value;
+                }
+            }
+            last if($header{From} && $header{To} && $header{Cc} &&
+                    $header{Subject} && $header{Date});
+        }
+        close F;
+        for(@fields){
+            print "  $_: $header{$_}\n" if($header{$_});
+        }
+        print "  Size: $size\n",
+              "\n";
+    }
+}
+
+sub build_msgs_list {
+    my($string,$age) = @_;
+    die "build_msgs_list syntax error\n" unless($string || $age);
+
+    my $msgs;
+    my @bystring = find_msgs_bystring($string) if($string);
+    my @byage = find_msgs_byage($age) if($age);
+    if($string && $age){
+        # convert, and compare
+        # my %hash = map { $_ => 1 } @byage # not faster
+        my %hash;
+        for my $msg (@byage){
+            $hash{$msg} = 1;
+        }
+        for my $msg (@bystring){
+            $msgs .= "$msg," if($hash{$msg});
+        }
+        chop($msgs); # tailing comma
+    }else{
+        $msgs = ($string) ? join(',', @bystring) : join(',', @byage);
+    }
+
+    $msgs ? return($msgs) : return(0);
+}
+
+sub find_msgs_byage {
+    my $age = shift;
+    die "find_msgs_byage syntax error\n" unless($age =~ /^\d+(\.\d+)?$/);
+
+    my @msgs;
+    my @subdirs = getsplit();
+    for my $subdir (@subdirs){
+        opendir(S, "${qmail}/queue/info/${subdir}/") || die "cannot open queue/info/$subdir/: $!\n";    
+        for my $file (grep {!/^\./} readdir S){
+            my $fileage = (stat("${qmail}/queue/info/${subdir}/${file}"))[10];
+            my $hours = (($^T - $fileage)/3600);
+            push @msgs, $file if($hours > $age);
+        }
+        closedir S;
+    }
+    @msgs ? return(@msgs) : return(0);
+}
+
+sub find_msgs_bystring {
+    my $string = shift || die "find_msgs_bystring syntax error\n";
+
+    my @subdirs = getsplit();
+
+    my $opts = '-l';
+    my ($regex,$modifier);
+    if($string =~ m#^/(.+)/(i)?$#){
+        ($regex,$modifier) = ($1,$2);
+        $opts .= ' -E';
+        $opts .= ' -i' if($modifier eq 'i');
+    }else{
+        $regex = $string;
+        $regex =~ s#\|#\\|#g;
+    }
+
+    my @msgs;
+    # using find|xargs grep is must faster than regex matching in perl (dunno why)
+    # grep -r isnt portable, dunno if it's safe for huge file lists
+    my $last=0;
+    open(GREP, "find ${qmail}/queue/mess/ -type f | xargs grep $opts \"$regex\" /dev/null 2>/dev/null |") || die "could not fork find | xargs grep: $!\n";
+    # do not count on grep's exit code, because:
+    #  if a message is removed while grepping, exit code is 2
+    while(<GREP>){
+        chomp;
+        push @msgs, /(\d+)$/; # dont worry about dupes: using -l
+    }
+    close GREP;
+    @msgs ? return(@msgs) : return(0);
+}
+
+sub syntax {
+    print <<EOH
+    qmqtool version __VERSION__
+    syntax: qmqtool [-l] [-L] [-R] [-S [-nN]] [-T] [-s] [-Q] [-c] [-r] [-i [-nN]] [-V]
+                    [-E(A|R|L)] [-U(A|R|L)] [-vN [-w]] [-e(N|[-f 'STRING'][-oN])] [-u(N|[-f 'STRING'][-oN])]
+                    [-d(N|[-f 'STRING'][-oN])] [-f 'STRING'] [-oN] [-B(b|r)] [-x(N|[-f 'STRING'][-oN])]
+
+    -l        list messages in all parts of the queue
+    -L        list messages with local recipients
+    -R        list messages with remote recipients
+    -T        list messages not completely processed
+    -s        show statistical information
+    -Q        be as quiet as possible (useful for snmp, cron, and such)
+    -V        be more verbose
+    -B
+      b       Backup queue into ${qmail}/queue.backup/
+      r       Restore backup from ${qmail}/queue.backup/
+    -c        check queue consitancy
+    -r        repair queue (by deleting fragments) found by checking queue consistancy
+    -i        show how many messages are queued per ip address
+       -nN    pay attention to the Nth last smtp-hop
+    -S        show how many bytes are queued per ip address
+    -e        expire message
+              may specify N (multiples may be comma separated), or -f 'STRING' and/or -o N
+    -u        unexpire message
+              may specify N (multiples may be comma separated), or -f 'STRING' and/or -o N
+    -d        delete message
+              may specify N (multiples may be comma separated), or -f 'STRING' and/or -o N
+    -E        expire messages in [A]ll, [R]emote, or [L]ocal queues
+    -U        unexpire messages in [A]ll, [R]emote, or [L]ocal queues
+    -v
+      N       view first 100 lines of message number N
+      N -w    view whole message N
+    -f 'STR'  display comma separated list of message number(s) containing STR.
+              prints 0 if no matches are found.
+    -o N      display comma separated list of message number(s) older than N hours.
+              prints 0 if no matches are found.
+    -x N      prints extended information on message N.  format identical to -l.
+              may specify N (multiples may be comma separated), or -f 'STR' and/or -o N
+
+    see the FAQ for examples.
+EOH
+;
+}
